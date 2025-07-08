@@ -1,0 +1,117 @@
+#!/bin/bash
+
+#==============================================================================#
+#                                 🚇 Tunnelsmith 🚇                             #
+#   Reverse SSH Tunnel Script - Modified to persist after Termux exit         #
+#==============================================================================#
+
+# --- Configuration ---
+REMOTE_HOST="toraport.mooo.com"
+REMOTE_USER="root"
+SSH_PORT="65535"
+
+# --- Colors & Emojis ---
+C_RESET='\033[0m'
+C_RED='\033[0;31m'
+C_GREEN='\033[0;32m'
+C_YELLOW='\033[0;33m'
+C_CYAN='\033[0;36m'
+C_PURPLE='\033[0;35m'
+C_WHITE='\033[1;37m'
+
+EMOJI_TUNNEL="🚇"
+EMOJI_SUCCESS="✅"
+EMOJI_ERROR="❌"
+EMOJI_STOP="🛑"
+EMOJI_LIST="📋"
+EMOJI_LINK="🔗"
+
+# --- Help Function ---
+usage() {
+    echo -e "${C_WHITE}🚇 Tunnelsmith - a persistent tunnel manager${C_RESET}"
+    echo -e "${C_YELLOW}Usage:${C_RESET} ${C_CYAN}$0 <make|list|kill|killall|help>${C_RESET}"
+    echo -e "\n${C_PURPLE}make <local_port>${C_RESET}   ${EMOJI_TUNNEL} Create tunnel from local port"
+    echo -e "${C_PURPLE}list${C_RESET}                ${EMOJI_LIST} Show active tunnels"
+    echo -e "${C_PURPLE}kill <pid>${C_RESET}          ${EMOJI_STOP} Kill a tunnel by PID"
+    echo -e "${C_PURPLE}killall${C_RESET}             ${EMOJI_STOP} Kill all tunnels"
+    echo -e "${C_PURPLE}help${C_RESET}                Show this message"
+}
+
+# --- Main Commands ---
+case "$1" in
+    make)
+        LOCAL_PORT=$2
+        if [[ -z "$LOCAL_PORT" || ! "$LOCAL_PORT" =~ ^[0-9]+$ ]]; then
+            echo -e "${EMOJI_ERROR} ${C_RED}Error: Provide a valid local port${C_RESET}"
+            exit 1
+        fi
+
+        REMOTE_PORT=$(( RANDOM % 55535 + 10000 ))
+
+        echo -e "\n${EMOJI_TUNNEL} ${C_CYAN}Creating tunnel...${C_RESET}"
+        echo -e "${EMOJI_LINK} Forward: ${C_WHITE}localhost:${LOCAL_PORT} → ${REMOTE_HOST}:${REMOTE_PORT}${C_RESET}"
+
+        mkdir -p "$HOME/tmp"
+        nohup ssh -o StrictHostKeyChecking=no -o ExitOnForwardFailure=yes -o ServerAliveInterval=60 \
+            -N -R ${REMOTE_PORT}:localhost:${LOCAL_PORT} \
+            ${REMOTE_USER}@${REMOTE_HOST} -p ${SSH_PORT} &> "$HOME/tmp/tunnel_${REMOTE_PORT}.log" &
+        disown
+
+        sleep 2
+        TUNNEL_PID=$(pgrep -af "ssh.*${REMOTE_PORT}:localhost:${LOCAL_PORT}" | awk '{print $1}')
+
+        if ps -p $TUNNEL_PID > /dev/null; then
+            echo -e "${EMOJI_SUCCESS} ${C_GREEN}Tunnel is now active!${C_RESET}"
+            echo -e "  PID: ${C_YELLOW}$TUNNEL_PID${C_RESET}"
+            echo -e "  URL: ${C_CYAN}http://${REMOTE_HOST}:${REMOTE_PORT}${C_RESET}"
+        else
+            echo -e "${EMOJI_ERROR} ${C_RED}Tunnel failed to start.${C_RESET}"
+        fi
+        ;;
+
+    list)
+        echo -e "\n${EMOJI_LIST} ${C_CYAN}Active tunnels:${C_RESET}"
+        PIDS=$(pgrep -af "ssh.*-R.*${REMOTE_HOST}")
+        if [ -n "$PIDS" ]; then
+            echo -e "PID\t\tRemote Port\tLocal Port"
+            echo -e "-----------------------------------------"
+            while read -r line; do
+                pid=$(echo "$line" | awk '{print $1}')
+                remote_p=$(echo "$line" | sed -n 's/.*-R \([0-9]*\):.*/\1/p')
+                local_p=$(echo "$line" | sed -n 's/.*localhost:\([0-9]*\).*/\1/p')
+                echo -e "${pid}\t\t${remote_p}\t\t${local_p}"
+            done <<< "$PIDS"
+        else
+            echo -e "${C_GREEN}No tunnels found.${C_RESET}"
+        fi
+        ;;
+
+    kill)
+        PID=$2
+        if [[ -z "$PID" || ! "$PID" =~ ^[0-9]+$ ]]; then
+            echo -e "${EMOJI_ERROR} ${C_RED}Provide a valid PID.${C_RESET}"
+            exit 1
+        fi
+        if ps -p $PID > /dev/null; then
+            kill $PID
+            echo -e "${EMOJI_STOP} ${C_GREEN}Tunnel $PID terminated.${C_RESET}"
+        else
+            echo -e "${EMOJI_ERROR} ${C_RED}PID not found.${C_RESET}"
+        fi
+        ;;
+
+    killall)
+        echo -e "${C_YELLOW}Killing all tunnels to ${REMOTE_HOST}...${C_RESET}"
+        PIDS=$(pgrep -f "ssh.*-R.*${REMOTE_HOST}")
+        if [ -n "$PIDS" ]; then
+            kill $PIDS
+            echo -e "${EMOJI_STOP} ${C_GREEN}All tunnels terminated.${C_RESET}"
+        else
+            echo -e "${C_GREEN}No active tunnels found.${C_RESET}"
+        fi
+        ;;
+
+    help|*)
+        usage
+        ;;
+esac
